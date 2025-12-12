@@ -1,0 +1,79 @@
+# vrnetlab / Cisco IOS XRv9k
+This is the vrnetlab docker image for Cisco IOS XRv9k.
+
+> Originally developed by Kristian Larsson (@plajjan), adapted by @hellt to be integrated with [containerlab](https://containerlab.srlinux.dev) networking.  
+
+There are two flavours of virtual XR routers, XRv and XRv9k where the latter
+has a much more complete forwarding plane. This is for XRv9k if you have the
+non-9k see the 'xrv' directory instead.
+
+## Added in this fork
+
+* integration with containerlab as [vr-xrv9k](https://containerlab.srlinux.dev/manual/kinds/vr-xrv9k/) kind.
+* docker networking using `--connection-mode` flag
+* Added `vcpu` and `ram` flags to tune the resources allocated to XRv VM
+* hostname, username and password configuration via flags
+* added support for [boot delay](https://containerlab.srlinux.dev/manual/vrnetlab/#boot-delay) to allow for a smooth start of the big topologies
+* enabled gNMI
+* qemu arguments were augmented with `-machine smm=off` and `-boot order=c` values to allow XRv 7 to boot.
+* base image updated to Ubuntu:20.04
+
+## Building the docker image
+
+### Installation steps
+
+1. Obtain the XRv9k image (.qcow2) from Cisco (or CML). A .iso version is also shipped but this is currently unsupported and you must convert the .iso to .qcow2.
+
+2. Place the .qcow2 file in this directory
+
+3. Perform `make docker-image` (or `make docker-image INSTALL=false`)
+
+4. Begin labbing. The image will be listed as `vrnetlab/vr-xrv9k` 
+
+> The tag is the same as the version of the XRv9k image,
+so if you have xrv9k-fullk9-x.vrr-6.2.1.qcow2 your final docker image will be called vr-xrv9k:6.2.1
+
+## Install option
+
+The XRv9k takes 20+ minutes to boot on the initial boot, this is because of a 'baking' process. 
+
+This means when used in your labs, this first boot will occur every time you deploy your lab. To help with this, there is an install feature.
+
+When enabled, on image build the XRv9k is booted so that this first boot baking process is completed, meaning when used in your labs the XRv9k boot time should be much shorter.
+
+The install procedure introduces some side effects as various values (such as macpool) are baked-in during this installation procedure.
+
+This can cause issues, and for this reason you may want consider carefully whether to enable it or not.
+
+Enable the install feature by using the following command when building XRv9k:
+
+```
+make docker-image INSTALL=true
+```
+
+> Please note that disabling the install feature will mean the boot time of XRv9k will increase to 20+ minutes.
+
+## Known working versions
+
+It's been tested to boot and respond to SSH with:
+
+ * xrv9k-fullk9-x-7.2.1.qcow2
+ * xrv9k-fullk9-x-7.7.1.qcow2
+ * xrv9k-fullk9-x-7.11.1.qcow2
+
+## VGA Image Limitation
+
+For XRv9k images with "vga" in the filename (e.g., `xrv9k-fullk9-x.vrr.vga-7.1.1.qcow2`), 
+the install mode (`INSTALL=true`) cannot work automatically because these images 
+require VGA console access for the first boot. When building with `INSTALL=true` for 
+VGA images:
+
+1. The build will complete successfully
+2. A warning will be displayed about the VGA image limitation
+3. The install process will be skipped
+4. The resulting Docker image will work, but the first boot will be slower (20+ minutes)
+5. For first boot, you may need to connect via VNC to complete the initial setup
+
+If you need faster first boot times, consider using a non-VGA version of the XRv9k image.
+
+docker run -d --name xrv9k --privileged -p 5902:5900 -p 22:22 -p 5000:5000 vrnetlab/cisco_xrv9k:7.1.1 && sleep 3 && vncviewer localhost:5902
