@@ -12,6 +12,8 @@ from scrapli.driver.core import IOSXRDriver
 
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
 
+# OVMF for UEFI boot major version 25+
+ovmf_code = "/OVMF.fd"
 
 def handle_SIGCHLD(signal, frame):
     os.waitpid(-1, os.WNOHANG)
@@ -53,6 +55,7 @@ class XRv9k_vm(vrnetlab.VM):
             ram=ram,
             smp=f"cores={vcpu},threads=1,sockets=1",
             use_scrapli=True,
+            cpu="host,+ssse3,+sse4.1,+sse4.2,+x2apic",
         )
         
         # extract version num
@@ -63,7 +66,9 @@ class XRv9k_vm(vrnetlab.VM):
         except: #noqa: E722
             version = re.search(r"\d+(?:\.\d+)+", self.image).group(0)
         
-        self.version_major = int(version.split(".")[0])
+        version_parts = version.split(".")
+        self.version_major = int(version_parts[0])
+        self.version_minor = int(version_parts[1]) if len(version_parts) > 1 else 0
 
         self.hostname = hostname
         self.conn_mode = conn_mode
@@ -75,8 +80,6 @@ class XRv9k_vm(vrnetlab.VM):
                 "smm=off",
                 "-boot",
                 "order=c",
-                "-cpu",
-                "qemu64,+ssse3,+sse4.1,+sse4.2",
                 "-serial",
                 "telnet:0.0.0.0:50%02d,server,nowait" % (self.num + 1),
                 "-serial",
@@ -85,6 +88,53 @@ class XRv9k_vm(vrnetlab.VM):
                 "telnet:0.0.0.0:50%02d,server,nowait" % (self.num + 3),
             ]
         )
+
+        # For XRv9k 25.x, or 24.4+, we need to replace the default IDE disk with virtio-blk-pci
+        # and add OVMF UEFI firmware
+        use_ovmf = False
+        if self.version_major > 25:
+            use_ovmf = True
+        elif self.version_major == 25:
+            use_ovmf = True
+        elif self.version_major == 24 and self.version_minor >= 4:
+            use_ovmf = True
+        # else: do not use OVMF/UEFI
+        if use_ovmf:
+            # Remove the IDE disk that parent class added (both -drive flag and its value),
+            # and extract the original qcow2 image path
+            new_args = []
+            skip_next = False
+            disk_file = None
+            for i, arg in enumerate(self.qemu_args):
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg == "-drive":
+                    if i + 1 < len(self.qemu_args):
+                        drive_arg = self.qemu_args[i+1]
+                        if "if=ide" in drive_arg or ".qcow2" in drive_arg:
+                            # Extract file=... from the drive_arg
+                            match = re.search(r"file=([^,]+)", drive_arg)
+                            if match:
+                                disk_file = match.group(1)
+                            skip_next = True
+                            continue
+                new_args.append(arg)
+            self.qemu_args = new_args
+
+            # Add virtio-blk-pci disk configuration using the overlay created by vrnetlab core
+            self.qemu_args.extend([
+                "-drive",
+                f"file={disk_file},if=none,id=drive-virtio-disk0,format=qcow2",
+                "-device",
+                "virtio-blk-pci,drive=drive-virtio-disk0,id=virtio-disk0",
+            ])
+            
+            # Attach OVMF
+            self.qemu_args.extend([
+                "-drive",
+                f"if=pflash,format=raw,unit=0,readonly=on,file={ovmf_code}",
+            ])
 
     def gen_mgmt(self):
         """Generate qemu args for the mgmt interface(s)"""
@@ -305,7 +355,7 @@ if __name__ == "__main__":
         "--vcpu", type=int, default=4, help="Number of cpu cores to use"
     )
     parser.add_argument(
-        "--ram", type=int, default=16384, help="Number RAM to use in MB"
+        "--ram", type=int, default=24576, help="Number RAM to use in MB"
     )
     parser.add_argument(
         "--connection-mode",
